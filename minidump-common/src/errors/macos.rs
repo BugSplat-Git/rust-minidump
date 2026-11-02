@@ -28,6 +28,7 @@ pub enum ExceptionCodeMac {
     EXC_SYSCALL = 7,
     EXC_MACH_SYSCALL = 8,
     EXC_RPC_ALERT = 9,
+    EXC_CRASH = 10,
     EXC_RESOURCE = 11,
     EXC_GUARD = 12,
     /// Fake exception code used by Crashpad's SimulateCrash ('CPsx')
@@ -428,4 +429,45 @@ pub enum ExceptionCodeMacGuardVirtMemoryFlavor {
 #[derive(Copy, Clone, PartialEq, Eq, Debug, FromPrimitive)]
 pub enum ExceptionCodeMacGuardRejecteSysCallFlavor {
     GUARD_EXC_MACH_TRAP = 0x00000000,
+}
+
+/// Mac/iOS Crash Exceptions
+///
+/// These are the signals from [bsd/sys/signal.h][header] in Apple's kernel sources
+///
+/// [header]: https://github.com/apple/darwin-xnu/blob/2ff845c2e033bd0ff64b5b6aa6063a1f8f65aa32/bsd/sys/signal.h#L84-L123
+#[repr(u32)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, FromPrimitive)]
+pub enum ExceptionCodeMacCrashType {
+    SIGHUP = 1,
+    SIGINT = 2,
+    SIGQUIT = 3,
+    SIGILL = 4,
+    SIGTRAP = 5,
+    SIGABRT = 6,
+    SIGEMT = 7,
+    SIGFPE = 8,
+    SIGKILL = 9,
+    SIGBUS = 10,
+    SIGSEGV = 11,
+    SIGSYS = 12,
+    SIGPIPE = 13,
+    SIGALRM = 14,
+    SIGTERM = 15,
+    SIGURG = 16,
+    SIGSTOP = 17,
+    SIGTSTP = 18,
+    SIGCONT = 19,
+    SIGCHLD = 20,
+    SIGTTIN = 21,
+    SIGTTOU = 22,
+    SIGIO = 23,
+    SIGXCPU = 24,
+    SIGXFSZ = 25,
+    SIGVTALRM = 26,
+    SIGPROF = 27,
+    SIGWINCH = 28,
+    SIGINFO = 29,
+    SIGUSR1 = 30,
+    SIGUSR2 = 31,
 }

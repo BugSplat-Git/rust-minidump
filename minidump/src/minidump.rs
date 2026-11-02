@@ -514,6 +514,7 @@ pub struct MinidumpSoftErrors<'a> {
 pub enum CrashReason {
     /// A Mac/iOS error code with no other interesting details.
     MacGeneral(err::ExceptionCodeMac, u32),
+    MacCrash(err::ExceptionCodeMacCrashType),
     MacBadAccessKern(err::ExceptionCodeMacBadAccessKernType),
     MacBadAccessArm(err::ExceptionCodeMacBadAccessArmType),
     MacBadAccessPpc(err::ExceptionCodeMacBadAccessPpcType),
@@ -4385,6 +4386,14 @@ impl CrashReason {
         let exception_code = record.exception_code;
         let exception_flags = record.exception_flags;
 
+        // Crashpad stores the original EXC_CRASH code here when it didn't wrap another exception
+        if exception_code == 0
+            && record.number_parameters >= 2
+            && info[0] == ExceptionCodeMac::EXC_CRASH as u64
+        {
+            return Some(Self::from_mac_crash_code(info[1]));
+        }
+
         // Default to just directly reporting this reason.
         let mac_reason = err::ExceptionCodeMac::from_u32(exception_code)?;
         let mut reason = CrashReason::MacGeneral(mac_reason, exception_flags);
@@ -4507,6 +4516,9 @@ impl CrashReason {
                     // Do nothing
                 }
             },
+            ExceptionCodeMac::EXC_CRASH => {
+                reason = Self::from_mac_crash_code(exception_flags as u64);
+            }
             ExceptionCodeMac::EXC_RESOURCE => {
                 if let Some(ty) =
                     err::ExceptionCodeMacResourceType::from_u32((exception_flags >> 29) & 0x7)
@@ -4526,6 +4538,14 @@ impl CrashReason {
             }
         }
         Some(reason)
+    }
+
+    fn from_mac_crash_code(code: u64) -> CrashReason {
+        let signal = ((code >> 24) & 0xff) as u32;
+        match err::ExceptionCodeMacCrashType::from_u32(signal) {
+            Some(signal) => CrashReason::MacCrash(signal),
+            None => CrashReason::MacGeneral(err::ExceptionCodeMac::EXC_CRASH, code as u32),
+        }
     }
 
     pub fn from_linux_exception(
@@ -4799,6 +4819,7 @@ impl fmt::Display for CrashReason {
 
             // Thse codes just repeat their names
             MacGeneral(ex, flags) => write!(f, "{ex:?} / {flags:#010x}"),
+            MacCrash(signal) => write!(f, "EXC_CRASH / {signal:?}"),
             MacBadAccessKern(ex) => write!(f, "EXC_BAD_ACCESS / {ex:?}"),
             MacBadAccessArm(ex) => write!(f, "EXC_BAD_ACCESS / {ex:?}"),
             MacBadAccessPpc(ex) => write!(f, "EXC_BAD_ACCESS / {ex:?}"),
@@ -7448,6 +7469,65 @@ mod test {
         assert_eq!(
             exception_stream.get_crash_address(system_stream.os, system_stream.cpu),
             0xf0e1_d2c3_b4a5_9687
+        );
+    }
+
+    #[test]
+    fn test_exception_mac_crash() {
+        let mac_crash_reason = |code: u32, flags: u32, info: &[u64]| {
+            let system_info = SystemInfo::new(Endian::Little)
+                .set_platform_id(PlatformId::MacOs as u32)
+                .set_processor_architecture(
+                    ProcessorArchitecture::PROCESSOR_ARCHITECTURE_ARM64 as u16,
+                );
+
+            let mut exception = Exception::new(Endian::Little);
+            exception.exception_record.exception_code = code;
+            exception.exception_record.exception_flags = flags;
+            exception.exception_record.number_parameters = info.len() as u32;
+            exception.exception_record.exception_information[..info.len()].copy_from_slice(info);
+
+            let dump = SynthMinidump::with_endian(Endian::Little)
+                .add_system_info(system_info)
+                .add_exception(exception);
+
+            let dump = read_synth_dump(dump).unwrap();
+
+            let system_stream = dump.get_stream::<MinidumpSystemInfo>().unwrap();
+            let exception_stream = dump.get_stream::<MinidumpException>().unwrap();
+            exception_stream.get_crash_reason(system_stream.os, system_stream.cpu)
+        };
+
+        // Crashpad, abort()
+        assert_eq!(
+            mac_crash_reason(0, 0, &[10, 0x0600_0000, 0]),
+            CrashReason::MacCrash(err::ExceptionCodeMacCrashType::SIGABRT)
+        );
+        assert_eq!(
+            mac_crash_reason(0, 0, &[10, 0x0f00_0000, 0]).to_string(),
+            "EXC_CRASH / SIGTERM"
+        );
+
+        // Crashpad, segfault: the wrapped exception is reported
+        assert_eq!(
+            mac_crash_reason(1, 1, &[10, 0x0b10_0001, 0]).to_string(),
+            "EXC_BAD_ACCESS / KERN_INVALID_ADDRESS"
+        );
+
+        // EXC_CRASH as the exception code
+        assert_eq!(
+            mac_crash_reason(10, 0x0600_0000, &[]).to_string(),
+            "EXC_CRASH / SIGABRT"
+        );
+        assert_eq!(
+            mac_crash_reason(10, 0x4000_0000, &[]).to_string(),
+            "EXC_CRASH / 0x40000000"
+        );
+
+        assert_eq!(mac_crash_reason(0, 0, &[]), CrashReason::Unknown(0, 0));
+        assert_eq!(
+            mac_crash_reason(0, 0, &[11, 0x0600_0000, 0]),
+            CrashReason::Unknown(0, 0)
         );
     }
 
